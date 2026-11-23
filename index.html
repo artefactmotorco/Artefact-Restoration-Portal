@@ -19,6 +19,9 @@ main{max-width:900px;margin:0 auto;padding:18px}
 .lbl{font-size:12px;color:var(--mut)}
 .val{font-weight:600}
 .bad{color:var(--bad)}
+.task{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)}
+.task .ttl{flex:1 1 220px;text-align:left}
+.task select{width:auto;margin:0;padding:6px 8px}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
 h3{margin:18px 0 8px;font-size:15px}
@@ -83,6 +86,7 @@ th{font-size:12px;color:var(--mut);font-weight:500}
   <section id="detail" class="hide">
     <button id="back" class="ghost">&larr; All projects</button>
     <h2 id="dname"></h2>
+    <p class="lbl">Tap a stage to see its tasks and assign people.</p>
     <div class="card wrap"><table><thead><tr>
       <th>Stage</th><th>Status</th><th>Budget</th><th>Actual</th><th>Remaining</th>
     </tr></thead><tbody id="stages"></tbody></table></div>
@@ -147,14 +151,62 @@ async function openProject(p) {
   const { data, error } = await sb.from("facet_financials").select("*")
     .eq("project_id", p.project_id).order("sort_order");
   if (error) { body.append(el("tr")).append(el("td", error.message, "msg")); return; }
+  const ids = data.map(f => f.facet_id);
+  const [tk, pp] = await Promise.all([
+    sb.from("tasks").select("id,facet_id,title,est_hours,status,assignee_id").in("facet_id", ids).order("sort_order"),
+    sb.from("profiles").select("id,full_name,role").in("role", ["owner","staff","subcontractor"]).eq("active", true).order("full_name")
+  ]);
+  const people = pp.data || [];
+  const tasksBy = {};
+  (tk.data || []).forEach(t => (tasksBy[t.facet_id] = tasksBy[t.facet_id] || []).push(t));
+
+  const taskBox = f => {
+    const wrap = el("div");
+    (tasksBy[f.facet_id] || []).forEach(t => {
+      const line = el("div", undefined, "task");
+      line.append(el("span", t.title + " (" + t.est_hours + "h)", "ttl"));
+      const who = el("select");
+      const none = el("option", "Unassigned"); none.value = ""; who.append(none);
+      people.forEach(x => { const o = el("option", x.full_name || "(no name)"); o.value = x.id; who.append(o); });
+      who.value = t.assignee_id || "";
+      who.onchange = async () => {
+        const r = await sb.from("tasks").update({ assignee_id: who.value || null }).eq("id", t.id);
+        if (r.error) alert(r.error.message);
+      };
+      const st = el("select");
+      [["todo","To do"],["in_progress","In progress"],["blocked","Blocked"],["done","Done"]].forEach(([v, l]) => {
+        const o = el("option", l); o.value = v; st.append(o);
+      });
+      st.value = t.status;
+      st.onchange = async () => {
+        const r = await sb.from("tasks").update({
+          status: st.value, completed_at: st.value === "done" ? new Date().toISOString() : null
+        }).eq("id", t.id);
+        if (r.error) alert(r.error.message);
+      };
+      line.append(who, st);
+      wrap.append(line);
+    });
+    return wrap;
+  };
+
   data.forEach(f => {
     const budget = f.budget_parts + f.budget_sublet + f.budget_labour;
     const actual = f.actual_parts + f.actual_sublet + f.actual_labour;
     const tr = el("tr");
+    tr.style.cursor = "pointer";
     tr.append(el("td", f.name), el("td", f.status.replace(/_/g, " ")),
       el("td", money(budget)), el("td", money(actual)),
       el("td", money(budget - actual), (budget - actual) < 0 ? "bad" : ""));
-    body.append(tr);
+    const dr = el("tr", undefined, "hide");
+    const td = el("td"); td.colSpan = 5; td.style.textAlign = "left";
+    dr.append(td);
+    let built = false;
+    tr.onclick = () => {
+      if (!built) { td.append(taskBox(f)); built = true; }
+      dr.classList.toggle("hide");
+    };
+    body.append(tr, dr);
   });
 }
 
