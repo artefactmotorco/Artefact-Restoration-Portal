@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Restoration Portal</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--text:#1d1d1b;--mut:#6b6a63;--line:#dedcd4;--acc:#2f5d3a;--bad:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#161614;--card:#222220;--text:#efeee9;--mut:#9a988f;--line:#3a3935;--acc:#6fbf82;--bad:#f2867f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--card)}
+header h1{font-size:18px;margin:0}
+main{max-width:900px;margin:0 auto;padding:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:12px}
+.row{cursor:pointer}
+.row:hover{border-color:var(--acc)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:8px}
+.lbl{font-size:12px;color:var(--mut)}
+.val{font-weight:600}
+.bad{color:var(--bad)}
+input,button{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);width:100%;margin-bottom:10px}
+button{background:var(--acc);color:#fff;border:0;cursor:pointer;width:auto}
+button.ghost{background:none;color:var(--text);border:1px solid var(--line)}
+.wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:560px}
+th,td{text-align:right;padding:8px;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;color:var(--mut);font-weight:500}
+.msg{color:var(--bad);min-height:1.4em}
+.hide{display:none}
+</style>
+</head>
+<body>
+<header><h1>Restoration Portal</h1><button id="out" class="ghost hide">Sign out</button></header>
+<main>
+  <section id="login" class="card hide" style="max-width:380px;margin:40px auto">
+    <h2 style="margin-top:0">Sign in</h2>
+    <input id="email" type="email" placeholder="Email" autocomplete="username">
+    <input id="pass" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="go">Sign in</button>
+    <p id="err" class="msg"></p>
+  </section>
+  <section id="list" class="hide"><h2>Projects</h2><div id="projects"></div></section>
+  <section id="detail" class="hide">
+    <button id="back" class="ghost">&larr; All projects</button>
+    <h2 id="dname"></h2>
+    <div class="card wrap"><table><thead><tr>
+      <th>Stage</th><th>Status</th><th>Budget</th><th>Actual</th><th>Remaining</th>
+    </tr></thead><tbody id="stages"></tbody></table></div>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.58.0/dist/umd/supabase.js"></script>
+<script>
+const SUPABASE_URL = "https://xzfcwhadpdnkbsskoviu.supabase.co";
+const SUPABASE_KEY = "sb_publishable_xg-cm8IsOEmLqGy0NtO8Sg_tLZMPx9k";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const $ = id => document.getElementById(id);
+const money = n => new Intl.NumberFormat("en-AU", {style:"currency", currency:"AUD", maximumFractionDigits:0}).format(n || 0);
+const show = name => ["login","list","detail"].forEach(s => $(s).classList.toggle("hide", s !== name));
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+function stat(label, value, bad) {
+  const d = el("div");
+  d.append(el("div", label, "lbl"), el("div", value, "val" + (bad ? " bad" : "")));
+  return d;
+}
+
+async function loadProjects() {
+  show("list");
+  $("out").classList.remove("hide");
+  const box = $("projects");
+  box.textContent = "Loading...";
+  const { data, error } = await sb.from("project_financials").select("*").order("code");
+  box.textContent = "";
+  if (error) { box.append(el("p", error.message, "msg")); return; }
+  if (!data.length) {
+    box.append(el("p", "No projects to show. If you expected some, your account may not be set up as owner or staff yet.", "lbl"));
+    return;
+  }
+  data.forEach(p => {
+    const card = el("div", undefined, "card row");
+    card.append(el("strong", (p.code ? p.code + " - " : "") + p.name));
+    const g = el("div", undefined, "grid");
+    g.append(
+      stat("Quote", money(p.quote_total)),
+      stat("Budget cost", money(p.total_budget)),
+      stat("Actual cost", money(p.total_actual)),
+      stat("Margin to date", money(p.margin_to_date), p.margin_to_date < 0),
+      stat("Status", (p.status || "").replace(/_/g, " "))
+    );
+    card.append(g);
+    card.onclick = () => openProject(p);
+    box.append(card);
+  });
+}
+
+async function openProject(p) {
+  show("detail");
+  $("dname").textContent = (p.code ? p.code + " - " : "") + p.name;
+  const body = $("stages");
+  body.textContent = "";
+  const { data, error } = await sb.from("facet_financials").select("*")
+    .eq("project_id", p.project_id).order("sort_order");
+  if (error) { body.append(el("tr")).append(el("td", error.message, "msg")); return; }
+  data.forEach(f => {
+    const budget = f.budget_parts + f.budget_sublet + f.budget_labour;
+    const actual = f.actual_parts + f.actual_sublet + f.actual_labour;
+    const tr = el("tr");
+    tr.append(el("td", f.name), el("td", f.status.replace(/_/g, " ")),
+      el("td", money(budget)), el("td", money(actual)),
+      el("td", money(budget - actual), (budget - actual) < 0 ? "bad" : ""));
+    body.append(tr);
+  });
+}
+
+$("go").onclick = async () => {
+  $("err").textContent = "";
+  const { error } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("pass").value });
+  if (error) $("err").textContent = error.message; else loadProjects();
+};
+$("pass").onkeydown = e => { if (e.key === "Enter") $("go").click(); };
+$("back").onclick = () => show("list");
+$("out").onclick = async () => { await sb.auth.signOut(); $("out").classList.add("hide"); show("login"); };
+
+sb.auth.getSession().then(({ data }) => data.session ? loadProjects() : show("login"));
+</script>
+</body>
+</html>
