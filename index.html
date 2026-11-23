@@ -19,7 +19,10 @@ main{max-width:900px;margin:0 auto;padding:18px}
 .lbl{font-size:12px;color:var(--mut)}
 .val{font-weight:600}
 .bad{color:var(--bad)}
-input,button{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);width:100%;margin-bottom:10px}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
+h3{margin:18px 0 8px;font-size:15px}
+input,select,button{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);width:100%;margin-bottom:10px}
 button{background:var(--acc);color:#fff;border:0;cursor:pointer;width:auto}
 button.ghost{background:none;color:var(--text);border:1px solid var(--line)}
 .wrap{overflow-x:auto}
@@ -41,7 +44,42 @@ th{font-size:12px;color:var(--mut);font-weight:500}
     <button id="go">Sign in</button>
     <p id="err" class="msg"></p>
   </section>
-  <section id="list" class="hide"><h2>Projects</h2><div id="projects"></div></section>
+  <section id="list" class="hide">
+    <div class="top"><h2 style="margin:0">Projects</h2><button id="newbtn">+ New project</button></div>
+    <div id="projects"></div>
+  </section>
+  <section id="newproj" class="hide">
+    <button id="cancel" class="ghost">&larr; Cancel</button>
+    <h2>New project</h2>
+    <div class="card">
+      <h3 style="margin-top:0">Customer</h3>
+      <select id="c_sel"></select>
+      <div id="newc">
+        <input id="c_name" placeholder="Customer name">
+        <div class="two"><input id="c_email" type="email" placeholder="Email (optional)"><input id="c_phone" placeholder="Phone (optional)"></div>
+      </div>
+      <h3>Vehicle</h3>
+      <div class="two">
+        <input id="v_make" list="makes" placeholder="Make (e.g. Land Rover)">
+        <input id="v_model" placeholder="Model (e.g. Series IIA 88)">
+        <input id="v_year" type="number" placeholder="Year">
+        <input id="v_vin" placeholder="Chassis / VIN (optional)">
+      </div>
+      <datalist id="makes"><option>Land Rover</option><option>Range Rover</option><option>Porsche</option></datalist>
+      <h3>Project</h3>
+      <input id="p_name" placeholder="Project name (e.g. 1967 Series IIA restoration)">
+      <div class="two">
+        <input id="p_code" placeholder="Project code">
+        <select id="p_template"></select>
+        <input id="p_quote" type="number" placeholder="Quote total, ex-GST ($)">
+        <input id="p_deposit" type="number" value="20" placeholder="Deposit %">
+      </div>
+      <div class="lbl">Start date (optional)</div>
+      <input id="p_start" type="date">
+      <button id="create">Create project</button>
+      <p id="nperr" class="msg"></p>
+    </div>
+  </section>
   <section id="detail" class="hide">
     <button id="back" class="ghost">&larr; All projects</button>
     <h2 id="dname"></h2>
@@ -58,7 +96,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const $ = id => document.getElementById(id);
 const money = n => new Intl.NumberFormat("en-AU", {style:"currency", currency:"AUD", maximumFractionDigits:0}).format(n || 0);
-const show = name => ["login","list","detail"].forEach(s => $(s).classList.toggle("hide", s !== name));
+const show = name => ["login","list","detail","newproj"].forEach(s => $(s).classList.toggle("hide", s !== name));
 
 function el(tag, text, cls) {
   const e = document.createElement(tag);
@@ -119,6 +157,72 @@ async function openProject(p) {
     body.append(tr);
   });
 }
+
+function fillSelect(sel, rows, firstLabel) {
+  sel.textContent = "";
+  if (firstLabel) { const o = el("option", firstLabel); o.value = ""; sel.append(o); }
+  rows.forEach(r => { const o = el("option", r.name); o.value = r.id; sel.append(o); });
+}
+
+async function openNew() {
+  show("newproj");
+  $("nperr").textContent = "";
+  const [cu, tp, pc] = await Promise.all([
+    sb.from("customers").select("id,name").order("name"),
+    sb.from("project_templates").select("id,name").order("name"),
+    sb.from("projects").select("id", { count: "exact", head: true })
+  ]);
+  fillSelect($("c_sel"), cu.data || [], "+ New customer");
+  fillSelect($("p_template"), tp.data || []);
+  $("newc").classList.remove("hide");
+  $("p_code").value = new Date().getFullYear() + "-" + String((pc.count || 0) + 1).padStart(3, "0");
+}
+
+$("newbtn").onclick = openNew;
+$("cancel").onclick = () => show("list");
+$("c_sel").onchange = () => $("newc").classList.toggle("hide", $("c_sel").value !== "");
+
+$("create").onclick = async () => {
+  const err = m => { $("nperr").textContent = m; };
+  err("");
+  const name = $("p_name").value.trim(), quote = parseFloat($("p_quote").value), tpl = $("p_template").value;
+  const make = $("v_make").value.trim(), model = $("v_model").value.trim();
+  if (!name || !(quote > 0) || !tpl) return err("Please fill in the project name, template and quote.");
+  if (!make || !model) return err("Please enter the vehicle make and model.");
+  $("create").disabled = true;
+  try {
+    let cid = $("c_sel").value;
+    if (!cid) {
+      const cn = $("c_name").value.trim();
+      if (!cn) return err("Enter a customer name or pick an existing customer.");
+      const r = await sb.from("customers").insert({
+        name: cn, email: $("c_email").value.trim() || null, phone: $("c_phone").value.trim() || null
+      }).select("id").single();
+      if (r.error) return err(r.error.message);
+      cid = r.data.id;
+    }
+    const v = await sb.from("vehicles").insert({
+      customer_id: cid, make, model,
+      year: parseInt($("v_year").value) || null, chassis_vin: $("v_vin").value.trim() || null
+    }).select("id").single();
+    if (v.error) return err(v.error.message);
+    const p = await sb.from("projects").insert({
+      code: $("p_code").value.trim() || null, name, vehicle_id: v.data.id, customer_id: cid,
+      quote_total: quote, deposit_pct: parseFloat($("p_deposit").value) || 0,
+      start_date: $("p_start").value || null, status: "quoted"
+    }).select("id,code,name").single();
+    if (p.error) return err(p.error.message);
+    const f = await sb.rpc("create_project_from_template", { p_project: p.data.id, p_template: tpl });
+    if (f.error) {
+      await sb.from("projects").delete().eq("id", p.data.id);
+      return err(f.error.message);
+    }
+    ["c_name","c_email","c_phone","v_make","v_model","v_year","v_vin","p_name","p_quote","p_start"].forEach(i => $(i).value = "");
+    openProject({ project_id: p.data.id, code: p.data.code, name: p.data.name });
+  } finally {
+    $("create").disabled = false;
+  }
+};
 
 $("go").onclick = async () => {
   $("err").textContent = "";
